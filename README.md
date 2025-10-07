@@ -1,97 +1,139 @@
 # 🛡️ repoauth.sh
 
-**repoauth.sh** is a secure, portable Bash utility for setting up SSH authentication to Git repositories (GitHub, GitLab, or any SSH‑based host).
+**repoauth.sh** is a zero‑nonsense Linux shell utility that configures secure SSH authentication
+for any Git host — **GitHub, GitLab, or self‑hosted instances** — the right way.
 
-It lets you interactively provide a Git SSH URL and a private key (pasted or stdin), then automatically:
+It lets you paste an SSH private key once and automatically:
 
-- 🔐 Writes the key safely under `~/.ssh` with `600` permissions  
-- 🧩 Adds or updates a proper `~/.ssh/config` `Host` entry  
-- 🪣 Logs operations through `systemd-journald` (if available)  
-- 🧠 Validates inputs, permissions, and exits cleanly with error handling  
-- 🧬 100% ShellCheck‑clean and works on **any Linux distro**
+- 🔐 Writes it to `~/.ssh/<host>.key` with strict `600` permissions  
+- 🧩 Adds a proper `Host <hostname>` block to your `~/.ssh/config`  
+- 🪶 Cleans CRLF newlines for copy‑pasted keys  
+- 🧠 Verifies directory and file permissions (`700` / `600`)  
+- 🧾 Logs actions to both **stderr** and **systemd‑journald**  
+- 🧱 Works out of the box on any mainstream Linux distribution
+
+No aliases, no URL parsing, no drama — just a clean SSH experience.
 
 ---
 
-## 🚀 Quickstart (One‑liner)
+## 🚀 Quickstart
 
-Run directly from GitHub with `wget`:
+Run it directly from GitHub (root or user shell — no install needed):
 
 ```bash
 bash <(wget -qO- https://raw.githubusercontent.com/Paul1404/repoauth.sh/main/repoauth.sh)
 ```
 
-> 💡 You’ll be prompted for the repo SSH address and private key interactively.  
-> The script will configure everything securely in `~/.ssh/`.
+or, if your system prefers `curl`:
 
----
-
-## 🧩 Example session
-
-```text
-$ bash repoauth.sh
-
-=== repoauth: Secure Git SSH Auth Setup ===
-Works for any Git SSH host (GitHub, GitLab, custom).
-
-Enter Git SSH repo URL (e.g. git@github.com:user/repo.git): git@github.com:pauldresch/private-repo.git
-Paste your private SSH key below. Press Ctrl+D when done.
-⚠️ The key will be saved with strict 600 permissions.
-----------------------------------------------------------------
-[... you paste your key ...]
-
-✔ SSH key configuration complete for host: github.com
-
-You can now use this alias:
-  git clone github.com-repoauth:user/private-repo.git
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Paul1404/repoauth.sh/main/repoauth.sh)
 ```
 
 ---
 
-## 🧰 Features
+## 🧩 Example Session
 
-- **Secure by default** — strict permissions, no key echoing  
-- **Systemd logging** — view logs with `journalctl -t repoauth`  
-- **Fails fast** — strong input validation and informative error handling  
-- **Self‑contained** — no dependencies beyond `bash`, `sed`, `ssh`, `chmod`, and `mkdir`  
-- **Cross‑distro compatible** — works seamlessly on RHEL, Debian, Ubuntu, Fedora, SUSE, Arch, etc.  
-- **Readable & maintainable** — fully ShellCheck‑compliant and cleanly structured
+```text
+$ bash repoauth.sh
+[2025-10-07 23:59:12] [INFO] Starting repoauth v3.0
+Enter Git host (e.g. github.com, gitlab.com, custom.domain): github.com
+Paste your private SSH key for this host.
+Press Ctrl+D when done.
+⚠️ Key will be stored with strict 600 permissions.
+-------------------------------------------------------------
+[ you paste key here, end with Ctrl+D ]
+[INFO] Private key written to /home/user/.ssh/github.com.key
+[INFO] Added SSH configuration block for github.com
+Test SSH connection to github.com now? [y/N]: y
+Hi Paul1404! You've successfully authenticated, but GitHub does not provide shell access.
+
+✅ Setup complete for host: github.com
+```
+
+Your SSH now *just works*:
+
+```bash
+git clone git@github.com:Paul1404/repoauth.sh.git
+```
+
+---
+
+## 🧰 Configuration Result
+
+```text
+~/.ssh/config
+─────────────────────────────────────────────
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/github.com.key
+    IdentitiesOnly yes
+```
+
+The corresponding key is stored at:
+```
+~/.ssh/github.com.key
+```
+
+---
+
+## 🧩 Features
+| Category | Description |
+|-----------|-------------|
+| **Security First** | Explicit permissions: `~/.ssh` → 700, keys/config → 600 |
+| **Portability** | Pure Bash, works on RHEL, Debian, Ubuntu, Fedora, SUSE, Arch, etc. |
+| **Logging** | All actions logged to `stderr` and `journalctl -t repoauth` |
+| **Idempotent** | Removes existing host block before writing a new one |
+| **Input Sanity** | Strips CRLF newlines; aborts cleanly if input is empty |
+| **ShellCheck‑Clean** | Passes ShellCheck with zero warnings |
 
 ---
 
 ## 🧾 Requirements
 
-- Linux system with:
-  - `bash` 4.x or newer  
-  - `sed`, `chmod`, `ssh`, `mkdir`  
-  - Optional: `systemd-journald` for logging  
-- A valid SSH private key (OpenSSH format)
+- ✅ `bash`, `sed`, `ssh`, `chmod`, `mkdir`
+- ✅ Optional: `systemd‑journald` (for richer logs)
+- ✅ A copy‑pasteable **OpenSSH‑format private key**
 
 ---
 
-## 🧰 Removing a Key & Config Entry
+## 🪣 Removing a Host
 
-To revoke access for a host:
+To revoke or replace a key manually:
 
 ```bash
-rm -f ~/.ssh/repoauth-<hostname>.key
-sed -i '/Host <hostname>-repoauth/,/^$/d' ~/.ssh/config
+rm -f ~/.ssh/<host>.key
+sed -i "/Host <host>/,/^$/d" ~/.ssh/config
 ```
 
-Or add the soon‑to‑come `--remove <host>` feature.
+Or re‑run `repoauth.sh` for the same host and choose **“Overwrite”** when prompted.
 
 ---
 
-## 📖 License
+## 🧩 Logging
 
-MIT License © 2025 Paul Dresch  
-Use, modify, and distribute freely — just don’t forget to `chmod 600`.
-
----
-
-## 🪶 Logging
-
-To view run logs:
+Inspect past runs:
 
 ```bash
 journalctl -t repoauth
 ```
+
+---
+
+## 🛠 Exit Codes
+
+| Code | Meaning |
+|------|----------|
+| **0** | Success |
+| **1** | Missing requirement, invalid input, or user abort |
+| **2** | Permission or filesystem failure |
+
+---
+
+## ⚖️ License
+
+MIT License © 2025 Paul Dresch
+
+You’re free to use, modify, and redistribute with credit.
+Just don’t forget to `chmod 600 ~/.ssh/*.key`.
