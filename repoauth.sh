@@ -76,39 +76,38 @@ read_host() {
 read_key() {
     # -------------------------------------------------------------
     # Securely read a multiline private SSH key from stdin.
-    #  • Sends all prompts to stderr (so process‑substitution is safe)
-    #  • Reads raw key data from stdin until Ctrl+D / EOF
-    #  • Strips CRLF (\r) artifacts
-    #  • Validates that the result looks like a private key
+    #  • Prompts are sent to stderr (safe for process‑substitution)
+    #  • Reads until EOF (Ctrl+D)
+    #  • Strips CRLF line endings
+    #  • Basic sanity validation on BEGIN/END markers
     # -------------------------------------------------------------
-
     {
         echo
         echo "Paste your private SSH key for this host."
-        echo "When finished, press ENTER then Ctrl+D to submit."
-        echo "⚠️  Your key will not be displayed and will be stored with 0600 permissions."
+        echo "When finished, press ENTER then Ctrl+D."
+        echo "⚠️  The key won't be shown and will be saved with 0600 perms."
         echo "----------------------------------------------------------------"
     } >&2
 
-    # Read the key body
     local key
     key=$(cat)
-    # Trim trailing carriage returns (Windows line endings)
-    key=$(printf "%s" "$key" | tr -d '\r')
+    key=$(printf '%s' "$key" | tr -d '\r')
 
-    # Basic sanity checks
+    # Sanity checks
     if [[ -z "$key" ]]; then
         fatal "No key content received (input empty)."
     fi
-    if ! grep -q "-----BEGIN" <<<"$key"; then
+    if ! echo "$key" | grep -q -- "-----BEGIN"; then
         fatal "Invalid key: missing BEGIN line."
     fi
-    if ! grep -q "-----END" <<<"$key"; then
+    if ! echo "$key" | grep -q -- "-----END"; then
         fatal "Invalid key: missing END line."
     fi
 
-    # return the sanitized key on stdout
-    printf "%s\n" "$key"
+    # Optionally trim accidental blank lines
+    key=$(echo "$key" | awk 'NF')
+
+    printf '%s\n' "$key"
 }
 
 # -----------------------------------------------------------------------------
