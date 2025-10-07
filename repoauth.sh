@@ -1,100 +1,101 @@
 #!/bin/bash
 # -----------------------------------------------------------------------------
-# repoauth.sh — Securely configure SSH key auth for Git repositories
+# repoauth.sh — Secure SSH key setup for Git hosts
 # -----------------------------------------------------------------------------
-# Author: Paul Dresch
-# Version: 2.0
+# Author: Paul Dresch (Systems Engineer, Linux)
+# Version: 3.0
 # Date: 2025-10-07
 # -----------------------------------------------------------------------------
-# Purpose:
-#   - Works on any Linux distro with Bash + OpenSSH stack
-#   - Safely installs a user-provided SSH private key for Git repos
-#   - Updates ~/.ssh/config with proper permissions, idempotently
-#   - Logs operations through systemd-journald and stderr
+# Description:
+#   Secure, portable script that configures SSH authentication for any Git host
+#   (e.g. github.com, gitlab.company.net). Writes a private key safely to
+#   ~/.ssh and updates ~/.ssh/config with proper permissions and journald logs.
 # -----------------------------------------------------------------------------
-# Security/UX:
-#   - No exposed key material in process table or stdout
-#   - Strict bash error handling and quoting
-#   - ShellCheck-compliant (no SC2001, SC2086, SC2046 violations)
-#   - Interactive with fail-safe defaults, minimal external deps
+# Features:
+#   • Minimal dependencies (bash, sed, ssh, chmod, mkdir)
+#   • Works on all modern Linux distributions
+#   • ShellCheck‑clean, safe quoting, pipefail strict mode
+#   • No aliases — uses real host names (github.com, gitlab.com, etc.)
+#   • Sanitizes CRLF line endings in pasted keys
+#   • Logs actions to both stderr and systemd-journald (if available)
 # -----------------------------------------------------------------------------
 
 set -euo pipefail
 IFS=$'\n\t'
 
-# ==== Constants ===============================================================
 PROG="repoauth"
-VERSION="2.0"
+VERSION="3.0"
 SSH_DIR="${HOME}/.ssh"
 CONFIG_FILE="${SSH_DIR}/config"
 LOGGER_BIN=$(command -v logger || true)
 
-# ==== Logging =================================================================
+# -----------------------------------------------------------------------------
+# Logging + messaging helpers
+# -----------------------------------------------------------------------------
 log() {
-    local level="$1"
-    shift || true
+    local level="$1"; shift || true
     local msg="$*"
-    local timestamp
-    timestamp="$(date +"%Y-%m-%d %H:%M:%S")"
-    printf '[%s] [%s] %s\n' "$timestamp" "$level" "$msg" >&2
+    local ts
+    ts="$(date +"%F %T")"
+    printf '[%s] [%s] %s\n' "$ts" "$level" "$msg" >&2
     if [[ -n "$LOGGER_BIN" ]]; then
         "$LOGGER_BIN" -t "$PROG" "[$level] $msg"
     fi
 }
+info()  { log INFO "$*"; }
+warn()  { log WARN "$*"; }
+error() { log ERROR "$*"; }
+fatal() { log FATAL "$*"; exit 1; }
 
-info()    { log "INFO" "$*"; }
-warn()    { log "WARN" "$*"; }
-error()   { log "ERROR" "$*"; }
-fatal()   { log "FATAL" "$*"; exit 1; }
-
-# ==== Sanity Checks ===========================================================
+# -----------------------------------------------------------------------------
+# Dependency and directory checks
+# -----------------------------------------------------------------------------
 check_prereqs() {
-    local reqs=("ssh" "sed" "chmod" "mkdir")
+    local reqs=(bash ssh sed mkdir chmod)
     for bin in "${reqs[@]}"; do
-        command -v "$bin" >/dev/null 2>&1 || fatal "Required command not found: $bin"
+        command -v "$bin" >/dev/null 2>&1 || fatal "Missing required command: $bin"
     done
 }
 
-ensure_sshdir() {
+ensure_ssh_dir() {
     mkdir -p "$SSH_DIR"
     chmod 700 "$SSH_DIR"
     [[ -d "$SSH_DIR" ]] || fatal "Failed to create $SSH_DIR"
 }
 
-# ==== Input Helpers ===========================================================
-prompt_repo_url() {
-    local repo_url
-    read -r -p "Enter Git SSH repo URL (e.g. git@github.com:user/repo.git): " repo_url
-    [[ $repo_url =~ ^git@[^:]+:.+\.git$ ]] || fatal "Invalid repo SSH URL format."
-    printf '%s\n' "$repo_url"
-}
-
-extract_host() {
-    local repo_url="$1"
+# -----------------------------------------------------------------------------
+# Input + key reading
+# -----------------------------------------------------------------------------
+read_host() {
     local host
-    host=$(printf '%s\n' "$repo_url" | sed -E 's#^[^@]+@([^:/]+).*#\1#')
-    [[ -n "$host" ]] || fatal "Unable to extract host from $repo_url"
-    printf '%s\n' "$host"
+    read -r -p "Enter Git host (e.g. github.com, gitlab.com, custom.domain): " host
+    [[ -n "$host" ]] || fatal "Host cannot be empty."
+    echo "$host"
 }
 
-read_key_stdin() {
-    info "Paste the private key for this repository. Press Ctrl+D when done."
-    info "⚠️ The key will be saved with strict 600 permissions."
-    echo "----------------------------------------------------------------"
+read_key() {
+    echo
+    echo "Paste your private SSH key for this host."
+    echo "Press Ctrl+D when done."
+    echo "⚠️ Key will be stored with strict 600 permissions."
+    echo "-------------------------------------------------------------"
     local key
     key=$(cat)
     [[ -n "$key" ]] || fatal "No key content received."
-    printf '%s\n' "$key"
+    # Strip CRLFs (Windows copy/paste)
+    key=$(echo "$key" | tr -d '\r')
+    echo "$key"
 }
 
-# ==== File & Config Handling ==================================================
+# -----------------------------------------------------------------------------
+# Write key securely
+# -----------------------------------------------------------------------------
 write_key_file() {
     local host="$1" key_content="$2"
-    local keyfile="$SSH_DIR/repoauth-${host}.key"
+    local keyfile="${SSH_DIR}/${host}.key"
 
-    # Refuse to overwrite unless confirmed
     if [[ -f "$keyfile" ]]; then
-        read -r -p "Key for $host already exists. Overwrite? [y/N]: " yn
+        read -r -p "Key for ${host} already exists. Overwrite? [y/N]: " yn
         [[ "$yn" =~ ^[Yy]$ ]] || fatal "Aborted by user."
     fi
 
@@ -103,76 +104,89 @@ write_key_file() {
     chmod 600 "$keyfile" || fatal "Failed to set permissions on $keyfile"
     info "Private key written to $keyfile"
     unset key_content
+    echo "$keyfile"
 }
 
+# -----------------------------------------------------------------------------
+# Update SSH config with the real host name
+# -----------------------------------------------------------------------------
 update_ssh_config() {
     local host="$1" keyfile="$2"
+
     touch "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
 
-    # Remove any existing entry
-    if grep -qE "^Host ${host}-repoauth$" "$CONFIG_FILE"; then
-        sed -i "/^Host ${host}-repoauth/,/^$/d" "$CONFIG_FILE"
-        info "Removed old block for ${host}-repoauth"
+    if grep -qE "^Host[[:space:]]+$host$" "$CONFIG_FILE"; then
+        read -r -p "An SSH config entry for $host already exists. Overwrite it? [y/N]: " yn
+        [[ "$yn" =~ ^[Yy]$ ]] || fatal "Aborted by user."
+        sed -i "/^Host[[:space:]]\+$host/,/^$/d" "$CONFIG_FILE"
+        info "Removed old SSH config block for $host"
     fi
 
     cat >>"$CONFIG_FILE" <<EOF
 
-Host ${host}-repoauth
-    HostName ${host}
+Host $host
+    HostName $host
     User git
-    IdentityFile ${keyfile}
+    IdentityFile $keyfile
     IdentitiesOnly yes
 
 EOF
-    info "Updated SSH config: ${host}-repoauth → ${keyfile}"
+
+    info "Added SSH configuration block for $host"
 }
 
-# ==== Validation ==============================================================
-validate_permissions() {
-    [[ $(stat -c '%a' "$SSH_DIR") == "700" ]] || warn "~/.ssh permissions not 700"
-    [[ $(stat -c '%a' "$CONFIG_FILE") == "600" ]] || warn "SSH config permissions not 600"
+# -----------------------------------------------------------------------------
+# Validate and tip
+# -----------------------------------------------------------------------------
+validate_perms() {
+    [[ $(stat -c '%a' "$SSH_DIR") == "700" ]] || warn "~/.ssh directory permissions not 700"
+    [[ $(stat -c '%a' "$CONFIG_FILE") == "600" ]] || warn "~/.ssh/config permissions not 600"
 }
 
-# ==== Usage Tips ==============================================================
 usage_tips() {
     local host="$1"
     cat <<EOF
 
-✔ SSH key configuration complete for host: ${host}
+✅ Setup complete for host: $host
 
-You can now use the configured alias:
-  git clone ${host}-repoauth:user/repo.git
+You can now use your Git repos normally:
+  git clone git@$host:username/repository.git
 
-📘 Useful commands:
-  ssh -T ${host}-repoauth   # Verify connection
-  cat ~/.ssh/config         # Review configuration
-  rm -f ~/.ssh/repoauth-${host}.key   # Remove key (if needed)
-  sed -i '/Host ${host}-repoauth/,/^$/d' ~/.ssh/config  # Remove config entry
+Diagnostics:
+  ssh -T $host
+  cat ~/.ssh/config | grep -A4 "Host $host"
+
+Removal (manual):
+  rm -f ~/.ssh/${host}.key
+  sed -i '/Host ${host}/,/^$/d' ~/.ssh/config
+
+Logs:
+  journalctl -t repoauth
 
 EOF
 }
 
-# ==== Main ====================================================================
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
 main() {
     info "Starting $PROG v$VERSION"
     check_prereqs
-    ensure_sshdir
+    ensure_ssh_dir
 
-    local repo_url host key_data keyfile
-    repo_url=$(prompt_repo_url)
-    host=$(extract_host "$repo_url")
-    key_data=$(read_key_stdin)
-    keyfile="${SSH_DIR}/repoauth-${host}.key"
+    local host key_data keyfile
+    host=$(read_host)
+    key_data=$(read_key)
+    keyfile=$(write_key_file "$host" "$key_data")
 
-    write_key_file "$host" "$key_data"
     update_ssh_config "$host" "$keyfile"
-    validate_permissions
+    validate_perms
 
     if command -v ssh >/dev/null 2>&1; then
-        read -r -p "Test SSH connection to ${host}-repoauth now? [y/N]: " yn
+        read -r -p "Test SSH connection to $host now? [y/N]: " yn
         if [[ "$yn" =~ ^[Yy]$ ]]; then
-            ssh -T "${host}-repoauth" || warn "Non-zero exit from ssh (may be normal)"
+            ssh -T "$host" || warn "SSH test returned non-zero exit (check host or key)."
         fi
     fi
 
