@@ -74,17 +74,41 @@ read_host() {
 }
 
 read_key() {
-    echo
-    echo "Paste your private SSH key for this host."
-    echo "Press Ctrl+D when done."
-    echo "⚠️ Key will be stored with strict 600 permissions."
-    echo "-------------------------------------------------------------"
+    # -------------------------------------------------------------
+    # Securely read a multiline private SSH key from stdin.
+    #  • Sends all prompts to stderr (so process‑substitution is safe)
+    #  • Reads raw key data from stdin until Ctrl+D / EOF
+    #  • Strips CRLF (\r) artifacts
+    #  • Validates that the result looks like a private key
+    # -------------------------------------------------------------
+
+    {
+        echo
+        echo "Paste your private SSH key for this host."
+        echo "When finished, press ENTER then Ctrl+D to submit."
+        echo "⚠️  Your key will not be displayed and will be stored with 0600 permissions."
+        echo "----------------------------------------------------------------"
+    } >&2
+
+    # Read the key body
     local key
     key=$(cat)
-    [[ -n "$key" ]] || fatal "No key content received."
-    # Strip CRLFs (Windows copy/paste)
-    key=$(echo "$key" | tr -d '\r')
-    echo "$key"
+    # Trim trailing carriage returns (Windows line endings)
+    key=$(printf "%s" "$key" | tr -d '\r')
+
+    # Basic sanity checks
+    if [[ -z "$key" ]]; then
+        fatal "No key content received (input empty)."
+    fi
+    if ! grep -q "-----BEGIN" <<<"$key"; then
+        fatal "Invalid key: missing BEGIN line."
+    fi
+    if ! grep -q "-----END" <<<"$key"; then
+        fatal "Invalid key: missing END line."
+    fi
+
+    # return the sanitized key on stdout
+    printf "%s\n" "$key"
 }
 
 # -----------------------------------------------------------------------------
