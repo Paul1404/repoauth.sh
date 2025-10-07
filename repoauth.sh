@@ -76,16 +76,16 @@ read_host() {
 read_key() {
     # -------------------------------------------------------------
     # Securely read a multiline private SSH key from stdin.
-    #  • Prompts are sent to stderr (safe for process‑substitution)
-    #  • Reads until EOF (Ctrl+D)
-    #  • Strips CRLF line endings
-    #  • Basic sanity validation on BEGIN/END markers
+    # - Prompts go to stderr (safe in process substitution)
+    # - Reads until EOF (Ctrl+D)
+    # - Removes CR (\r) line endings
+    # - Validates that key looks plausible
     # -------------------------------------------------------------
     {
         echo
         echo "Paste your private SSH key for this host."
         echo "When finished, press ENTER then Ctrl+D."
-        echo "⚠️  The key won't be shown and will be saved with 0600 perms."
+        echo "⚠️  The key won't be displayed and will be saved with 0600 perms."
         echo "----------------------------------------------------------------"
     } >&2
 
@@ -94,18 +94,18 @@ read_key() {
     key=$(printf '%s' "$key" | tr -d '\r')
 
     # Sanity checks
-    if [[ -z "$key" ]]; then
+    if [ -z "$key" ]; then
         fatal "No key content received (input empty)."
     fi
-    if ! echo "$key" | grep -q -- "-----BEGIN"; then
-        fatal "Invalid key: missing BEGIN line."
+    if ! printf '%s\n' "$key" | grep 'BEGIN OPENSSH' >/dev/null 2>&1; then
+        fatal "Invalid key: missing BEGIN marker."
     fi
-    if ! echo "$key" | grep -q -- "-----END"; then
-        fatal "Invalid key: missing END line."
+    if ! printf '%s\n' "$key" | grep 'END OPENSSH' >/dev/null 2>&1; then
+        fatal "Invalid key: missing END marker."
     fi
 
-    # Optionally trim accidental blank lines
-    key=$(echo "$key" | awk 'NF')
+    # Drop blank lines that sometimes appear from copy/paste
+    key=$(printf '%s\n' "$key" | awk 'NF')
 
     printf '%s\n' "$key"
 }
